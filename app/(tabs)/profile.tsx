@@ -1,272 +1,219 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
-import { Text, Avatar, Button, Divider } from 'react-native-paper';
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, StyleSheet, FlatList, RefreshControl, Text, ActivityIndicator } from 'react-native';
+import { supabase, Post, Profile } from '@/lib/supabase';
+import PostCard from '@/components/PostCard';
 import EmptyState from '@/components/EmptyState';
+import LoadingScreen from '@/components/LoadingScreen';
+import Toast from 'react-native-toast-message';
 
-// Mock user data
-const mockUser = {
-  fullName: 'John Doe',
-  email: 'john.doe@example.com',
-  avatar: null,
-  postsCount: 12,
-  followersCount: 248,
-  followingCount: 180,
-};
+export default function ProfileScreen() {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-// Mock user posts
-const mockUserPosts = [
-  { id: '1', imageUrl: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400' },
-  { id: '2', imageUrl: 'https://images.unsplash.com/photo-1511920170033-f8396924c348?w=400' },
-  { id: '3', imageUrl: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=400' },
-  { id: '4', imageUrl: 'https://images.unsplash.com/photo-1501594907352-04cda38ebc29?w=400' },
-  { id: '5', imageUrl: 'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=400' },
-  { id: '6', imageUrl: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=400' },
-];
+  // ✅ Fetch user profile
+  const fetchProfile = async () => {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-export default function Profile() {
-  const [user] = useState(mockUser);
-  const [posts] = useState(mockUserPosts);
+      if (userError) throw userError;
+      if (!user) throw new Error('User not found');
 
-  const handleLogout = () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Logout', 
-          style: 'destructive',
-          onPress: () => {
-            // Logout logic will go here later
-            router.replace('/login');
-          }
-        },
-      ]
-    );
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (error) throw error;
+
+      // ✅ Safely cast with fallback values
+      const safeProfile: Profile = {
+        id: data.id,
+        email: data.email ?? '',
+        full_name: data.full_name ?? '',
+        avatar_url: data.avatar_url ?? null,
+        created_at: data.created_at ?? new Date().toISOString(),
+        updated_at: data.updated_at ?? new Date().toISOString(),
+        username: ''
+      };
+
+      setProfile(safeProfile);
+    } catch (error: any) {
+      console.error('❌ Error fetching profile:', error.message);
+      Toast.show({
+        type: 'error',
+        text1: 'Profile Error',
+        text2: error.message,
+      });
+      setProfile(null);
+    }
   };
 
-  const handleEditProfile = () => {
-    Alert.alert('Edit Profile', 'Profile editing will be implemented with functionality');
+  // ✅ Fetch posts for current user
+  const fetchUserPosts = async () => {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+      if (!user) throw new Error('User not found');
+
+      const { data, error } = await supabase
+        .from('posts')
+        .select(`
+          id,
+          content,
+          image_url,
+          created_at,
+          user_id,
+          profiles:user_id (
+            id,
+            full_name,
+            avatar_url,
+            email,
+            created_at,
+            updated_at
+          )
+        `)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      setPosts((data as unknown as Post[]) || []);
+    } catch (error: any) {
+      console.error('❌ Error fetching posts:', error.message);
+      Toast.show({
+        type: 'error',
+        text1: 'Post Error',
+        text2: error.message,
+      });
+    }
   };
+
+  // ✅ Initial load
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      await Promise.all([fetchProfile(), fetchUserPosts()]);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  // ✅ Pull-to-refresh
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([fetchProfile(), fetchUserPosts()]);
+    setRefreshing(false);
+  }, []);
+
+  const handlePostDeleted = async () => {
+    await fetchUserPosts();
+  };
+
+  if (loading) return <LoadingScreen />;
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Profile Header */}
-      <View style={styles.header}>
-        <View style={styles.avatarContainer}>
-          {user.avatar ? (
-            <Avatar.Image size={100} source={{ uri: user.avatar }} />
+    <View style={styles.container}>
+      {/* ✅ Profile Header */}
+      {profile ? (
+        <View style={styles.profileHeader}>
+          {profile.avatar_url ? (
+            <View style={styles.avatarWrapper}>
+              <img
+                src={profile.avatar_url}
+                alt="avatar"
+                style={{ width: 80, height: 80, borderRadius: 40 }}
+              />
+            </View>
           ) : (
-            <Avatar.Text 
-              size={100} 
-              label={user.fullName.charAt(0).toUpperCase()}
-              style={styles.avatar}
+            <View style={[styles.avatarWrapper, styles.emptyAvatar]} />
+          )}
+          <Text style={styles.name}>{profile.full_name || 'No Name'}</Text>
+          <Text style={styles.email}>{profile.email}</Text>
+        </View>
+      ) : (
+        <Text style={styles.errorText}>No profile data found.</Text>
+      )}
+
+      {/* ✅ Posts List */}
+      {posts.length === 0 ? (
+        <EmptyState
+          icon="images-outline"
+          title="No Posts Yet"
+          description="You haven't shared anything yet."
+        />
+      ) : (
+        <FlatList
+          data={posts}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <PostCard
+              post={item as Post & { profiles: NonNullable<Post['profiles']> }}
+              onDelete={handlePostDeleted}
             />
           )}
-          <TouchableOpacity style={styles.editAvatarButton}>
-            <Ionicons name="camera" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.userName}>{user.fullName}</Text>
-        <Text style={styles.userEmail}>{user.email}</Text>
-
-        {/* Stats */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{user.postsCount}</Text>
-            <Text style={styles.statLabel}>Posts</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{user.followersCount}</Text>
-            <Text style={styles.statLabel}>Followers</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{user.followingCount}</Text>
-            <Text style={styles.statLabel}>Following</Text>
-          </View>
-        </View>
-
-        {/* Action Buttons */}
-        <View style={styles.actionButtons}>
-          <Button
-            mode="contained"
-            onPress={handleEditProfile}
-            style={styles.editButton}
-            icon="pencil"
-          >
-            Edit Profile
-          </Button>
-          <Button
-            mode="outlined"
-            onPress={handleLogout}
-            style={styles.logoutButton}
-            textColor="#e74c3c"
-            icon="logout"
-          >
-            Logout
-          </Button>
-        </View>
-      </View>
-
-      <Divider style={styles.divider} />
-
-      {/* Posts Grid */}
-      <View style={styles.postsSection}>
-        <Text style={styles.sectionTitle}>My Posts</Text>
-        
-        {posts.length === 0 ? (
-          <EmptyState 
-            icon="images-outline"
-            title="No Posts Yet"
-            description="Start sharing your moments by creating your first post"
-          />
-        ) : (
-          <View style={styles.postsGrid}>
-            {posts.map((post) => (
-              <TouchableOpacity key={post.id} style={styles.postItem}>
-                <Image source={{ uri: post.imageUrl }} style={styles.postImage} />
-                <View style={styles.postOverlay}>
-                  <Ionicons name="heart" size={20} color="#fff" />
-                  <Text style={styles.postOverlayText}>24</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-      </View>
-    </ScrollView>
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#667eea']}
+              tintColor="#667eea"
+            />
+          }
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.postsList}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-  },
-  header: {
-    alignItems: 'center',
-    padding: 20,
-  },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 16,
-  },
-  avatar: {
-    backgroundColor: '#667eea',
-  },
-  editAvatarButton: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: '#667eea',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#fff',
-  },
-  userName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 4,
-  },
-  userEmail: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 20,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-    backgroundColor: '#f8f9ff',
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    borderRadius: 12,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statNumber: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#667eea',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: '#ddd',
-    marginHorizontal: 30,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    width: '100%',
-    gap: 12,
-  },
-  editButton: {
-    flex: 1,
-    backgroundColor: '#667eea',
-  },
-  logoutButton: {
-    flex: 1,
-    borderColor: '#e74c3c',
-  },
-  divider: {
-    height: 8,
     backgroundColor: '#f5f5f5',
   },
-  postsSection: {
-    padding: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 16,
-  },
-  postsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 2,
-  },
-  postItem: {
-    width: '32.5%',
-    aspectRatio: 1,
-    position: 'relative',
-  },
-  postImage: {
-    width: '100%',
-    height: '100%',
-  },
-  postOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    justifyContent: 'center',
+  profileHeader: {
     alignItems: 'center',
-    flexDirection: 'row',
-    opacity: 0,
+    marginTop: 20,
+    marginBottom: 15,
   },
-  postOverlayText: {
-    color: '#fff',
+  avatarWrapper: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    overflow: 'hidden',
+    backgroundColor: '#ccc',
+    marginBottom: 10,
+  },
+  emptyAvatar: {
+    backgroundColor: '#ddd',
+  },
+  name: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  email: {
     fontSize: 14,
-    fontWeight: 'bold',
-    marginLeft: 4,
+    color: '#666',
+    marginTop: 2,
+  },
+  postsList: {
+    paddingBottom: 60,
+  },
+  errorText: {
+    textAlign: 'center',
+    color: 'red',
+    marginTop: 20,
   },
 });

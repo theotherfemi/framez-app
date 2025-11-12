@@ -2,36 +2,187 @@ import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Image, TouchableOpacity, Alert } from 'react-native';
 import { TextInput, Button, Text } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/lib/store';
+import { router } from 'expo-router';
+import Toast from 'react-native-toast-message';
+import * as FileSystem from 'expo-file-system';
 
 export default function CreatePost() {
+  const { user } = useAuthStore();
   const [content, setContent] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handlePickImage = () => {
-    // Image picker logic will go here later
-    // For now, just show a placeholder
-    Alert.alert('Image Picker', 'Image picker will be implemented with functionality');
+  const handlePickImage = async () => {
+    try {
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
+        return;
+      }
+
+      // Pick image
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setSelectedImage(result.assets[0].uri);
+        Toast.show({
+          type: 'success',
+          text1: 'Image Selected',
+          text2: 'Ready to post!',
+        });
+      }
+    } catch (error: any) {
+      console.error('Image picker error:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Image Selection Failed',
+        text2: error.message,
+      });
+    }
   };
 
   const handleRemoveImage = () => {
     setSelectedImage(null);
+    Toast.show({
+      type: 'info',
+      text1: 'Image Removed',
+    });
   };
 
-  const handlePost = () => {
+  const uploadImage = async (uri: string): Promise<string | null> => {
+    try {
+        console.log('🖼️ Uploading image from:', uri);
+
+        const fileExt = uri.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = `${user!.id}-${Date.now()}.${fileExt}`;
+        const filePath = `${user!.id}/${fileName}`;
+
+        const response = await fetch(uri);
+        const blob = await response.blob();
+
+        const { data, error } = await supabase.storage
+        .from('post-images')
+        .upload(filePath, blob, {
+            contentType: `image/${fileExt}`,
+            upsert: false,
+        });
+
+        if (error) {
+        console.error('❌ Upload error:', error);
+        throw error;
+        }
+
+        const { data: publicData } = supabase.storage
+        .from('post-images')
+        .getPublicUrl(filePath);
+
+        console.log('✅ Public URL:', publicData.publicUrl);
+        return publicData.publicUrl;
+    } catch (error: any) {
+        console.error('❌ Upload failed:', error);
+        Toast.show({
+        type: 'error',
+        text1: 'Upload Failed',
+        text2: error.message || 'Could not upload image',
+        });
+        return null;
+    }
+  };
+
+  const handlePost = async () => {
+    console.log('📝 Starting post creation...');
+    console.log('User:', user?.id);
+    console.log('Content:', content);
+    console.log('Image:', selectedImage);
+
     if (!content.trim() && !selectedImage) {
-      Alert.alert('Error', 'Please add some content or an image');
+      Toast.show({
+        type: 'error',
+        text1: 'Empty Post',
+        text2: 'Please add some content or an image',
+      });
+      return;
+    }
+
+    if (!user) {
+      Toast.show({
+        type: 'error',
+        text1: 'Not Authenticated',
+        text2: 'Please log in to create a post',
+      });
+      router.replace('/login');
       return;
     }
 
     setLoading(true);
-    // Post creation logic will go here later
-    setTimeout(() => {
-      setLoading(false);
-      Alert.alert('Success', 'Post created successfully!');
+
+    try {
+      let imageUrl: string | null = null;
+
+      // Upload image if selected
+      if (selectedImage) {
+        console.log('📤 Uploading image...');
+        imageUrl = await uploadImage(selectedImage);
+        if (!imageUrl) {
+          console.error('❌ Image upload returned null');
+          setLoading(false);
+          return;
+        }
+        console.log('✅ Image uploaded:', imageUrl);
+      }
+
+      // Create post
+      console.log('💾 Creating post in database...');
+      const { error, data } = await supabase
+        .from('posts')
+        .insert({
+          user_id: user.id,
+          content: content.trim() || null,
+          image_url: imageUrl,
+        })
+        .select();
+
+      if (error) {
+        console.error('❌ Post creation error:', error);
+        throw error;
+      }
+
+      console.log('✅ Post created:', data);
+
+      Toast.show({
+        type: 'success',
+        text1: 'Post Created! 🎉',
+        text2: 'Your post has been shared',
+      });
+
+      // Reset form
       setContent('');
       setSelectedImage(null);
-    }, 1000);
+
+      // Navigate to feed
+      setTimeout(() => {
+        router.push('/(tabs)');
+      }, 500);
+    } catch (error: any) {
+      console.error('❌ Post creation failed:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Post Failed',
+        text2: error.message || 'Could not create post',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -61,6 +212,7 @@ export default function CreatePost() {
             <TouchableOpacity 
               style={styles.removeImageButton}
               onPress={handleRemoveImage}
+              disabled={loading}
             >
               <Ionicons name="close-circle" size={32} color="#fff" />
             </TouchableOpacity>
@@ -86,8 +238,14 @@ export default function CreatePost() {
           contentStyle={styles.postButtonContent}
           icon="send"
         >
-          Post
+          {loading ? 'Posting...' : 'Post'}
         </Button>
+
+        {loading && (
+          <Text style={styles.loadingText}>
+            {selectedImage ? 'Uploading image and creating post...' : 'Creating post...'}
+          </Text>
+        )}
 
         <View style={styles.tipsContainer}>
           <Text style={styles.tipsTitle}>📝 Tips for great posts:</Text>
@@ -174,10 +332,16 @@ const styles = StyleSheet.create({
   postButton: {
     backgroundColor: '#667eea',
     borderRadius: 8,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   postButtonContent: {
     paddingVertical: 8,
+  },
+  loadingText: {
+    textAlign: 'center',
+    color: '#667eea',
+    fontSize: 14,
+    marginBottom: 12,
   },
   tipsContainer: {
     backgroundColor: '#f8f9ff',

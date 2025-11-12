@@ -1,49 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
-import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store';
 import LoadingScreen from '@/components/LoadingScreen';
 
 export default function Index() {
-  const { session, setSession, setProfile } = useAuthStore();
-  const [loading, setLoading] = useState(true);
+  const { session } = useAuthStore();
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        fetchProfile(session.user.id);
-      }
-      setLoading(false);
-    });
+    // Give the auth state a moment to initialize from the root layout
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 500);
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        fetchProfile(session.user.id);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => clearTimeout(timer);
   }, []);
 
-  const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    
-    if (data) {
-      setProfile(data);
-    }
-  };
-
-  if (loading) {
+  if (!isReady) {
     return <LoadingScreen />;
   }
+
+  console.log('📍 Index - Session exists:', !!session);
 
   if (session) {
     return <Redirect href="/(tabs)" />;
