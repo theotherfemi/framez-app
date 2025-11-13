@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store';
 import { router } from 'expo-router';
 import Toast from 'react-native-toast-message';
-import * as FileSystem from 'expo-file-system';
+// import * as FileSystem from 'expo-file-system';
 
 export default function CreatePost() {
   const { user } = useAuthStore();
